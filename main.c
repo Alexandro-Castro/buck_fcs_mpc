@@ -26,19 +26,30 @@
 #define P2                  2
 
 //
-// ePWM1: up-down, TBCLK = 100 MHz
-// fpwm = TBCLK / (2 * TBPRD) = 100 MHz / (2 * 2500) = 20 kHz
+// ePWM1: up-down, fpwm = TBCLK / (2 * TBPRD)
 //
+// TBCLK = EPWMCLK = SYSCLK / 2. Sem o define _LAUNCHXL_F28379D, InitSysCtrl()
+// usa IMULT_20 e PLLCLK_BY_2, ou seja, SYSCLK = 10 x cristal:
+//   LaunchPad F28379D (cristal de 10 MHz):  SYSCLK = 100 MHz -> TBCLK =  50 MHz
+//   controlCARD F2837xD (cristal de 20 MHz): SYSCLK = 200 MHz -> TBCLK = 100 MHz
+// Confira no osciloscopio: o GPIO18 alterna a cada ISR, Ts = 1 / (2 * f_GPIO18).
+//
+#define TBCLK_HZ            50.0e6f             // LaunchPad; 100.0e6f no controlCARD
+
 #ifdef FCS_MPC
-#define EPWM1_PERIOD        (1250U / 2)                // TBPRD: 1250 para 20 kHz
+#define EPWM1_PERIOD        (1250U / 2)         // TBPRD 625: 40 kHz com TBCLK = 50 MHz
 #else
-#define EPWM1_PERIOD        (1250U)                // TBPRD: 1250 para 20 kHz
+#define EPWM1_PERIOD        (1250U)             // TBPRD 1250: 20 kHz com TBCLK = 50 MHz
 #endif
 
 #define EPWM1_DUTY          (EPWM1_PERIOD / 2)  // 50% (duty de A = CMPA / TBPRD)
-#define EPWM1_DEADBAND      50U                 // 50 TBCLK = 0,5 us
+#define EPWM1_DEADBAND      50U                 // 50 TBCLK = 1 us com TBCLK = 50 MHz
 
-float Ts = 50e-6;
+//
+// Periodo de amostragem = periodo do PWM up-down (uma ISR por periodo).
+// O modelo de predicao do FCS-MPC precisa deste valor exato.
+//
+float Ts = 2.0f * EPWM1_PERIOD / TBCLK_HZ;      // FCS: 25 us; PI: 50 us
 //
 // LED pisca a cada LED_TOGGLE_COUNT interrupcoes do ADC
 // (20 kHz / 1000 = alterna a cada 50 ms)
