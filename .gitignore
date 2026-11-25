@@ -1,0 +1,17 @@
+# Saidas de build do CCS (uma pasta por build configuration)
+CPU1_RAM/
+CPU1_FLASH/
+Debug/
+Release/
+
+# Artefatos de compilacao soltos
+*.out
+*.obj
+*.map
+*.d_raw
+*_linkInfo.xml
+
+# Arquivos gerados automaticamente pelo CCS / configuracao local da IDE
+.clangd
+.theia/
+.codex/
