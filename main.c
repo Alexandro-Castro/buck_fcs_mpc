@@ -10,6 +10,9 @@
 //   modo    = 0 PI, 1 FCS de corrente, 2 FCS de tensao (vale ao ligar)
 //   comando = 1  liga o controle; comando = 0 desliga (chaves abertas)
 //   rearme  = 1  sai do estado de falha (volta a parado)
+//   recalibra = 1  mede de novo o offset do sensor de corrente (parado)
+// Ao carregar, o programa mede o offset de iL (estado 3) antes de aceitar
+// comando = 1.
 //   estado, falha, iL_falha, vo_falha mostram o que aconteceu
 //
 // Chaves desligadas = trip one-shot do ePWM1 (EPWM1A e EPWM1B em 0, depois
@@ -41,9 +44,10 @@ float Ts            = 2.0f * TBPRD_FCS / TBCLK_HZ;   // FCS: 25 us; PI: 50 us
 // Estados e falhas
 //
 typedef enum {
-    ESTADO_PARADO  = 0,     // chaves desligadas, aguardando comando = 1
-    ESTADO_RODANDO = 1,     // controle ligado
-    ESTADO_FALHA   = 2      // chaves desligadas, aguardando rearme = 1
+    ESTADO_PARADO     = 0,  // chaves desligadas, aguardando comando = 1
+    ESTADO_RODANDO    = 1,  // controle ligado
+    ESTADO_FALHA      = 2,  // chaves desligadas, aguardando rearme = 1
+    ESTADO_CALIBRANDO = 3   // chaves desligadas, medindo o offset de iL
 } estado_t;
 
 typedef enum {
@@ -53,14 +57,16 @@ typedef enum {
     FALHA_DEPURADOR     = 3,    // CPU parada pelo depurador (TZ6)
     FALHA_RELOGIO       = 4,    // falha do relogio (TZ5)
     FALHA_TRIP          = 5,    // outro trip do ePWM1
-    FALHA_SOBRECORRENTE_HW = 6  // iL > IL_MAX_HW (comparador CMPSS1)
+    FALHA_SOBRECORRENTE_HW = 6, // iL > IL_MAX_HW (comparador CMPSS1)
+    FALHA_CALIBRACAO    = 7     // offset de iL > CAL_OFFSET_MAX
 } falha_t;
 
 //
 // Comandos (escritos no Watch)
 //
-volatile Uint16 comando = 0;
-volatile Uint16 rearme  = 0;
+volatile Uint16 comando   = 0;
+volatile Uint16 rearme    = 0;
+volatile Uint16 recalibra = 0;  // 1 com o conversor parado: mede o offset
 
 //
 // Referencias (escritas no Watch) e rampas
@@ -73,8 +79,9 @@ volatile float rampa_vo = RAMPA_VO_INICIAL; // V/s
 //
 // Variaveis para o Watch
 //
-volatile estado_t estado = ESTADO_PARADO;
+volatile estado_t estado = ESTADO_CALIBRANDO;
 volatile falha_t  falha  = FALHA_NENHUMA;
+volatile float offset_iL = 0;   // contagens descontadas de ADCRESULT1
 volatile float iL_falha  = 0;   // medidas no instante da falha
 volatile float vo_falha  = 0;
 
@@ -96,12 +103,18 @@ volatile Uint16 bufferFull;
 
 static Uint16 ledCount;
 
+static Uint16 calContagem;      // amostras da calibracao ate agora
+static Uint32 calSoma;
+
 //
 // Prototipos
 //
 void ConfigureADC(void);
 void SetupADCEpwm(void);
 void ConfigureCMPSS(void);
+static void ajusta_limite_cmpss(float offset);
+static void inicia_calibracao(void);
+static void calibra(Uint16 bruto);
 void ConfigureEPWM(void);
 void configurePWM_GPIOs(void);
 void StartEPWM(void);
@@ -284,17 +297,6 @@ void SetupADCEpwm(void)
 //
 void ConfigureCMPSS(void)
 {
-    Uint16 dac;
-
-    //
-    // IL_MAX_HW em contagens do ADC, convertido para a escala do DAC
-    //
-    dac = (Uint16)((IL_MAX_HW / KADC_I) * (ADC_VREFHI / CMPSS_VREF));
-    if(dac > 4095U)
-    {
-        dac = 4095U;
-    }
-
     EALLOW;
 
     Cmpss1Regs.COMPCTL.bit.COMPDACE    = 1;     // liga comparador e DAC
@@ -305,7 +307,6 @@ void ConfigureCMPSS(void)
     Cmpss1Regs.COMPDACCTL.bit.SELREF    = 0;    // referencia do DAC = VDDA
     Cmpss1Regs.COMPDACCTL.bit.DACSOURCE = 0;    // valor de DACHVALS
     Cmpss1Regs.COMPDACCTL.bit.SWLOADSEL = 0;    // carrega a cada SYSCLK
-    Cmpss1Regs.DACHVALS.bit.DACVAL      = dac;
 
     //
     // Filtro digital contra ruido de comutacao: 10 amostras a SYSCLK/10
@@ -326,6 +327,72 @@ void ConfigureCMPSS(void)
     EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX0   = 1;
 
     EDIS;
+
+    ajusta_limite_cmpss(0.0f);
+}
+
+//
+// ajusta_limite_cmpss - DAC do CMPSS1 em IL_MAX_HW, somando o offset do
+//                       sensor (em contagens do ADC) e convertendo para a
+//                       escala do DAC
+//
+static void ajusta_limite_cmpss(float offset)
+{
+    float  contagens;
+    Uint16 dac;
+
+    contagens = (IL_MAX_HW / KADC_I + offset) * (ADC_VREFHI / CMPSS_VREF);
+    dac = (contagens > 4095.0f) ? 4095U : (Uint16)contagens;
+
+    EALLOW;
+    Cmpss1Regs.DACHVALS.bit.DACVAL = dac;
+    EDIS;
+}
+
+//
+// inicia_calibracao - Zera o offset e volta a medir (chaves desligadas)
+//
+static void inicia_calibracao(void)
+{
+    calContagem = 0;
+    calSoma     = 0;
+    offset_iL   = 0;
+    estado      = ESTADO_CALIBRANDO;
+}
+
+//
+// calibra - Acumula ADCRESULT1 com as chaves desligadas; no fim, aplica o
+//           offset (ou vai para falha se ele for grande demais)
+//
+static void calibra(Uint16 bruto)
+{
+#if CALIBRA_IL
+    float media;
+
+    calContagem++;
+    if(calContagem <= CAL_DESCARTE)
+    {
+        return;
+    }
+
+    calSoma += bruto;
+    if(calContagem < CAL_DESCARTE + CAL_AMOSTRAS)
+    {
+        return;
+    }
+
+    media = (float)calSoma / (float)CAL_AMOSTRAS;
+    if(media > (float)CAL_OFFSET_MAX)
+    {
+        falha  = FALHA_CALIBRACAO;
+        estado = ESTADO_FALHA;
+        return;
+    }
+
+    offset_iL = media;
+    ajusta_limite_cmpss(media);
+#endif
+    estado = ESTADO_PARADO;
 }
 
 //
@@ -678,7 +745,7 @@ interrupt void adca1_isr(void)
     AdcaResults_1[resultsIndex] = AdcaResultRegs.ADCRESULT1;   // iL
 
     vo = AdcaResultRegs.ADCRESULT0 * KADC_V;
-    iL = AdcaResultRegs.ADCRESULT1 * KADC_I;
+    iL = ((float)AdcaResultRegs.ADCRESULT1 - offset_iL) * KADC_I;
 
     resultsIndex++;
     if(resultsIndex >= RESULTS_BUFFER_SIZE)
@@ -694,8 +761,18 @@ interrupt void adca1_isr(void)
     //
     switch(estado)
     {
+        case ESTADO_CALIBRANDO:
+            comando = 0;
+            calibra(AdcaResultRegs.ADCRESULT1);
+            break;
+
         case ESTADO_PARADO:
-            if(comando)
+            if(recalibra)
+            {
+                recalibra = 0;
+                inicia_calibracao();
+            }
+            else if(comando)
             {
                 liga();
             }
@@ -751,8 +828,16 @@ interrupt void adca1_isr(void)
             if(rearme)
             {
                 rearme = 0;
-                falha  = FALHA_NENHUMA;
-                estado = ESTADO_PARADO;
+                if(falha == FALHA_CALIBRACAO)
+                {
+                    falha = FALHA_NENHUMA;
+                    inicia_calibracao();        // tenta medir de novo
+                }
+                else
+                {
+                    falha  = FALHA_NENHUMA;
+                    estado = ESTADO_PARADO;
+                }
             }
             break;
     }

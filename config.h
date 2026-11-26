@@ -46,6 +46,17 @@
 #define KADC_V              (31.0f / 2080.0f)   // V por contagem (ADCINA0)
 #define KADC_I              (1.3f / 1600.0f)    // A por contagem (ADCINA2)
 
+//
+// Offset do sensor de corrente: medido ao carregar o programa (e com
+// recalibra = 1 no Watch), com as chaves desligadas, e descontado de iL.
+// Acima de CAL_OFFSET_MAX o programa vai para falha (corrente circulando
+// ou sensor com problema). CALIBRA_IL = 0 desliga a calibracao.
+//
+#define CALIBRA_IL          1
+#define CAL_DESCARTE        64U         // amostras ignoradas no inicio
+#define CAL_AMOSTRAS        1024U       // amostras na media
+#define CAL_OFFSET_MAX      250U        // contagens (~0,2 A)
+
 //---------------------------------------------------------------------------
 // Referencias iniciais (alteraveis no Watch: iL_ref, vo_ref)
 //   O controle segue iL_ref_atual / vo_ref_atual, que vao ate iL_ref / vo_ref
