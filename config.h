@@ -46,9 +46,23 @@
 
 //---------------------------------------------------------------------------
 // Referencias iniciais (alteraveis no Watch: iL_ref, vo_ref)
+//   O controle segue iL_ref_atual / vo_ref_atual, que vao ate iL_ref / vo_ref
+//   em rampa (alteravel no Watch: rampa_iL, rampa_vo). Na partida a rampa
+//   de corrente comeca em 0 e a de tensao na tensao medida.
 //---------------------------------------------------------------------------
 #define IL_REF_INICIAL      1.0f        // A
 #define VO_REF_INICIAL      10.0f       // V
+#define IL_REF_MAX          2.0f        // A: iL_ref acima disso e limitada
+#define VO_REF_MAX          25.0f       // V: vo_ref acima disso e limitada
+#define RAMPA_IL_INICIAL    100.0f      // A/s (0 -> 1 A em 10 ms)
+#define RAMPA_VO_INICIAL    500.0f      // V/s (0 -> 10 V em 20 ms)
+
+//---------------------------------------------------------------------------
+// Protecao por software: com o conversor ligado, qualquer medida acima do
+// limite desliga as duas chaves e trava em falha (rearme pelo Watch)
+//---------------------------------------------------------------------------
+#define IL_MAX              2.5f        // A (sensor satura em ~3,3 A)
+#define VO_MAX              30.0f       // V
 
 //---------------------------------------------------------------------------
 // PI em cascata (ki = KI * Ts)
@@ -69,11 +83,16 @@
 //---------------------------------------------------------------------------
 // Pinos
 //---------------------------------------------------------------------------
-#define GPIO_LED            31          // LED, pisca a cada LED_PERIODO_S
+#define GPIO_LED            31          // LED de estado
 #define GPIO_ISR            18          // depuracao: alterna a cada ISR
 #define GPIO_AUX            19          // saida em 0 (sem uso no codigo)
 #define GPIO_P2             2           // vai a 1 depois que o PWM liga
 
-#define LED_PERIODO_S       0.05f       // s entre alternancias do LED
+//
+// LED: tempo entre alternancias em cada estado
+//
+#define LED_PARADO_S        0.5f        // lento: parado, chaves desligadas
+#define LED_RODANDO_S       0.1f        // medio: controle rodando
+#define LED_FALHA_S         0.025f      // rapido: falha, aguardando rearme
 
 #endif // CONFIG_H

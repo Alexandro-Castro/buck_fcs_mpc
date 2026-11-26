@@ -12,11 +12,14 @@
 #include "controle.h"
 
 //
-// Referencias e limites (alteraveis no Watch)
+// Limite de corrente do custo do FCS de tensao (alteravel no Watch)
 //
-volatile float iL_ref   = IL_REF_INICIAL;
-volatile float vo_ref   = VO_REF_INICIAL;
 volatile float iL_limit = FCS_V_IL_LIMITE;
+
+//
+// Referencia de corrente gerada pela malha de tensao do PI (para o Watch)
+//
+volatile float iL_ref_pi = 0;
 
 //
 // Parametros do modelo
@@ -68,6 +71,9 @@ void controle_inicializacao(float Ts)
     pi_tensao.ki       = PI_V_KI * Ts;
     pi_tensao.integral = 0;
 
+    iL_ref_pi = 0;
+    sOpt      = 0;
+
     Ts_div_L   = Ts / L;
     E_Ts_div_L = E * Ts_div_L;
     Ts_div_C   = Ts / C;
@@ -77,12 +83,12 @@ void controle_inicializacao(float Ts)
 //
 // controle - PI em cascata: tensao (externa) -> iL_ref -> corrente -> duty
 //
-float controle(float v, float i)
+float controle(float v, float i, float vo_ref)
 {
     float erro_i;
 
-    iL_ref = controlador_pi(&pi_tensao, vo_ref - v);
-    erro_i = iL_ref - i;
+    iL_ref_pi = controlador_pi(&pi_tensao, vo_ref - v);
+    erro_i    = iL_ref_pi - i;
 
     return controlador_pi(&pi_corrente, erro_i);
 }
@@ -91,7 +97,7 @@ float controle(float v, float i)
 // controlador_fcs_mpc_corrente - Escolhe o estado que leva iL[k+1] mais
 //                                perto de iL_ref
 //
-int controlador_fcs_mpc_corrente(float vo, float iL)
+int controlador_fcs_mpc_corrente(float vo, float iL, float iL_ref)
 {
     int j;
     float gi;
@@ -120,7 +126,7 @@ int controlador_fcs_mpc_corrente(float vo, float iL)
 // controlador_fcs_mpc_tensao - Compensa o atraso (k+1 com o estado ja
 //                              aplicado) e escolhe o estado para k+2
 //
-int controlador_fcs_mpc_tensao(float vo, float iL)
+int controlador_fcs_mpc_tensao(float vo, float iL, float vo_ref)
 {
     int j;
     float gv;

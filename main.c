@@ -6,6 +6,15 @@
 // modo up-down, com EPWM1A/EPWM1B complementares. O controle roda na ISR
 // do ADC, uma vez por periodo do PWM.
 //
+// Operacao pelo Watch (Expressions) do CCS:
+//   comando = 1  liga o controle; comando = 0 desliga (chaves abertas)
+//   rearme  = 1  sai do estado de falha (volta a parado)
+//   estado, falha, iL_falha, vo_falha mostram o que aconteceu
+//
+// Chaves desligadas = trip one-shot do ePWM1 (EPWM1A e EPWM1B em 0, depois
+// do tempo morto). O trip tambem dispara sozinho se a CPU for parada pelo
+// depurador (TZ6) ou se o relogio falhar (TZ5).
+//
 // Baseado no exemplo adc_soc_epwm (F2837xD Support Library v210 - TI)
 //
 //###########################################################################
@@ -23,8 +32,6 @@
 #define EPWM1_PERIOD        TBPRD_PI
 #endif
 
-#define EPWM1_DUTY          (EPWM1_PERIOD / 2)  // 50% (duty de A = CMPA / TBPRD)
-
 //
 // Periodo de amostragem = periodo do PWM up-down (uma ISR por periodo).
 // O modelo de predicao do FCS-MPC precisa deste valor exato.
@@ -34,12 +41,52 @@ float Ts = 2.0f * EPWM1_PERIOD / TBCLK_HZ;      // FCS: 25 us; PI: 50 us
 #define RESULTS_BUFFER_SIZE 256
 
 //
+// Estados e falhas
+//
+typedef enum {
+    ESTADO_PARADO  = 0,     // chaves desligadas, aguardando comando = 1
+    ESTADO_RODANDO = 1,     // controle ligado
+    ESTADO_FALHA   = 2      // chaves desligadas, aguardando rearme = 1
+} estado_t;
+
+typedef enum {
+    FALHA_NENHUMA       = 0,
+    FALHA_SOBRECORRENTE = 1,    // iL > IL_MAX (software)
+    FALHA_SOBRETENSAO   = 2,    // vo > VO_MAX (software)
+    FALHA_DEPURADOR     = 3,    // CPU parada pelo depurador (TZ6)
+    FALHA_RELOGIO       = 4,    // falha do relogio (TZ5)
+    FALHA_TRIP          = 5     // outro trip do ePWM1
+} falha_t;
+
+//
+// Comandos (escritos no Watch)
+//
+volatile Uint16 comando = 0;
+volatile Uint16 rearme  = 0;
+
+//
+// Referencias (escritas no Watch) e rampas
+//
+volatile float iL_ref   = IL_REF_INICIAL;   // A
+volatile float vo_ref   = VO_REF_INICIAL;   // V
+volatile float rampa_iL = RAMPA_IL_INICIAL; // A/s
+volatile float rampa_vo = RAMPA_VO_INICIAL; // V/s
+
+//
 // Variaveis para o Watch
 //
-volatile float iL   = 0;    // A
-volatile float vo   = 0;    // V
-volatile float d    = 0;    // duty do PI
-volatile int   flag = 0;    // estado escolhido pelo FCS-MPC
+volatile estado_t estado = ESTADO_PARADO;
+volatile falha_t  falha  = FALHA_NENHUMA;
+volatile float iL_falha  = 0;   // medidas no instante da falha
+volatile float vo_falha  = 0;
+
+volatile float iL   = 0;        // A
+volatile float vo   = 0;        // V
+volatile float d    = 0;        // duty do PI
+volatile int   flag = 0;        // estado escolhido pelo FCS-MPC
+
+volatile float iL_ref_atual = 0;    // referencias seguidas pelo controle
+volatile float vo_ref_atual = 0;
 
 //
 // Buffers das ultimas amostras do ADC (contagens)
@@ -50,7 +97,6 @@ volatile Uint16 resultsIndex;
 volatile Uint16 bufferFull;
 
 static Uint16 ledCount;
-static Uint16 ledToggleCount;
 
 //
 // Prototipos
@@ -61,6 +107,13 @@ void ConfigureEPWM(void);
 void configurePWM_GPIOs(void);
 void StartEPWM(void);
 static inline void PWM1_SetA(Uint16 on);
+static void liga(void);
+static void desliga(void);
+static void entra_falha(falha_t f);
+static falha_t verifica_falhas(void);
+static float rampa(float atual, float alvo, float passo);
+static float limita(float x, float min, float max);
+static void pisca_led(void);
 interrupt void adca1_isr(void);
 
 void main(void)
@@ -73,9 +126,18 @@ void main(void)
     InitSysCtrl();
 
     //
-    // GPIOs
+    // GPIOs. GPIO0/GPIO1 (EPWM1A/B) ficam como saidas em 0 ate o ePWM
+    // estar rodando com o trip ativo
     //
     InitGpio();
+
+    GPIO_SetupPinMux(0, GPIO_MUX_CPU1, 0);
+    GPIO_SetupPinOptions(0, GPIO_OUTPUT, GPIO_PUSHPULL);
+    GPIO_WritePin(0, 0);
+
+    GPIO_SetupPinMux(1, GPIO_MUX_CPU1, 0);
+    GPIO_SetupPinOptions(1, GPIO_OUTPUT, GPIO_PUSHPULL);
+    GPIO_WritePin(1, 0);
 
     GPIO_SetupPinMux(GPIO_LED, GPIO_MUX_CPU1, 0);
     GPIO_SetupPinOptions(GPIO_LED, GPIO_OUTPUT, GPIO_PUSHPULL);
@@ -111,14 +173,13 @@ void main(void)
     controle_inicializacao(Ts);
 
     //
-    // ePWM (com os clocks de base de tempo travados)
+    // ePWM (com os clocks de base de tempo travados), ja com o trip ativo
     //
     EALLOW;
     CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 0;
     EDIS;
 
     ConfigureEPWM();
-    configurePWM_GPIOs();   // pinos so vao para o ePWM depois de configurado
 
     //
     // Buffers e LED
@@ -128,10 +189,9 @@ void main(void)
         AdcaResults_0[i] = 0;
         AdcaResults_1[i] = 0;
     }
-    resultsIndex   = 0;
-    bufferFull     = 0;
-    ledCount       = 0;
-    ledToggleCount = (Uint16)(LED_PERIODO_S / Ts);
+    resultsIndex = 0;
+    bufferFull   = 0;
+    ledCount     = 0;
 
     //
     // Habilita interrupcoes
@@ -142,20 +202,17 @@ void main(void)
     ERTM;
 
     //
-    // Liga o PWM (e, com ele, a amostragem do ADC)
+    // Liga o contador do PWM (e, com ele, a amostragem do ADC). As chaves
+    // continuam desligadas pelo trip; so os pinos passam para o ePWM.
     //
-#ifdef FCS_MPC
-    PWM1_SetA(0);
-    DELAY_US(1000);
-    PWM1_SetA(1);
-#endif
-
     StartEPWM();
+    DELAY_US(10);
+    configurePWM_GPIOs();
 
     GPIO_WritePin(GPIO_P2, 1);
 
     //
-    // Loop principal: o PWM e o ADC rodam continuamente por hardware
+    // Loop principal: o PWM, o ADC e o controle rodam por interrupcao
     //
     for(;;)
     {
@@ -237,7 +294,7 @@ void configurePWM_GPIOs(void)
 
 //
 // ConfigureEPWM - ePWM1 up-down, A/B complementares com tempo morto,
-//                 SOCA no pico do contador (CTR = TBPRD)
+//                 SOCA no pico do contador (CTR = TBPRD), trip ativo
 //
 void ConfigureEPWM(void)
 {
@@ -259,7 +316,7 @@ void ConfigureEPWM(void)
     //
     EPwm1Regs.CMPCTL.bit.SHDWAMODE = 0;
     EPwm1Regs.CMPCTL.bit.LOADAMODE = 0;
-    EPwm1Regs.CMPA.bit.CMPA        = EPWM1_DUTY;
+    EPwm1Regs.CMPA.bit.CMPA        = 0;
 
     //
     // Action qualifier
@@ -293,6 +350,21 @@ void ConfigureEPWM(void)
     EPwm1Regs.DBCTL.bit.OUT_MODE = 3;
     EPwm1Regs.DBRED.bit.DBRED    = PWM_TEMPO_MORTO;
     EPwm1Regs.DBFED.bit.DBFED    = PWM_TEMPO_MORTO;
+
+    //
+    // Trip zone: A e B em 0 (atua depois do tempo morto, entao desliga as
+    // duas chaves). Fontes one-shot: TZ5 = falha do relogio, TZ6 = CPU
+    // parada pelo depurador. Comeca com o trip forcado (chaves desligadas).
+    //
+    EPwm1Regs.TZCTL.bit.TZA     = 2;        // trip: EPWM1A em 0
+    EPwm1Regs.TZCTL.bit.TZB     = 2;        // trip: EPWM1B em 0
+    EPwm1Regs.TZCTL.bit.DCAEVT1 = 3;        // eventos do digital compare
+    EPwm1Regs.TZCTL.bit.DCAEVT2 = 3;        // sem acao direta (o padrao,
+    EPwm1Regs.TZCTL.bit.DCBEVT1 = 3;        // 0, e alta impedancia)
+    EPwm1Regs.TZCTL.bit.DCBEVT2 = 3;
+    EPwm1Regs.TZSEL.bit.OSHT5   = 1;
+    EPwm1Regs.TZSEL.bit.OSHT6   = 1;
+    EPwm1Regs.TZFRC.bit.OST     = 1;
 
     //
     // Trigger do ADC no pico do contador (valor medio da corrente no PI)
@@ -329,10 +401,150 @@ void StartEPWM(void)
 }
 
 //
+// liga - Reinicia o controle e libera as chaves (PARADO -> RODANDO)
+//
+static void liga(void)
+{
+    controle_inicializacao(Ts);
+
+    iL_ref_atual = 0;       // corrente parte de zero
+    vo_ref_atual = vo;      // tensao parte do valor atual do capacitor
+    d    = 0;
+    flag = 0;
+
+    EALLOW;
+    EPwm1Regs.TZOSTCLR.all   = 0x00FF;  // limpa as origens do trip (TZ6 etc.)
+    EPwm1Regs.TZCLR.bit.OST  = 1;       // libera as saidas
+    EPwm1Regs.TZCLR.bit.INT  = 1;
+    EDIS;
+
+    estado = ESTADO_RODANDO;
+}
+
+//
+// desliga - Abre as duas chaves pelo trip one-shot (-> PARADO)
+//
+static void desliga(void)
+{
+    EALLOW;
+    EPwm1Regs.TZFRC.bit.OST = 1;
+    EDIS;
+
+    //
+    // Deixa o PWM em 0 para a proxima partida nao comecar com A em 1
+    //
+    PWM1_SetA(0);
+    EPwm1Regs.CMPA.bit.CMPA = 0;
+    d    = 0;
+    flag = 0;
+
+    estado = ESTADO_PARADO;
+}
+
+//
+// entra_falha - Desliga, guarda as medidas e trava em FALHA
+//
+static void entra_falha(falha_t f)
+{
+    desliga();
+
+    falha    = f;
+    iL_falha = iL;
+    vo_falha = vo;
+    comando  = 0;
+    estado   = ESTADO_FALHA;
+}
+
+//
+// verifica_falhas - Trip do ePWM1 e limites de software (so com o controle
+//                   rodando)
+//
+static falha_t verifica_falhas(void)
+{
+    if(EPwm1Regs.TZFLG.bit.OST)
+    {
+        if(EPwm1Regs.TZOSTFLG.bit.OST6)
+        {
+            return FALHA_DEPURADOR;
+        }
+        if(EPwm1Regs.TZOSTFLG.bit.OST5)
+        {
+            return FALHA_RELOGIO;
+        }
+        return FALHA_TRIP;
+    }
+
+    if(iL > IL_MAX)
+    {
+        return FALHA_SOBRECORRENTE;
+    }
+
+    if(vo > VO_MAX)
+    {
+        return FALHA_SOBRETENSAO;
+    }
+
+    return FALHA_NENHUMA;
+}
+
+//
+// rampa - Aproxima atual de alvo em no maximo passo por amostra
+//
+static float rampa(float atual, float alvo, float passo)
+{
+    if(alvo > atual + passo)
+    {
+        return atual + passo;
+    }
+    if(alvo < atual - passo)
+    {
+        return atual - passo;
+    }
+    return alvo;
+}
+
+static float limita(float x, float min, float max)
+{
+    if(x > max)
+    {
+        return max;
+    }
+    if(x < min)
+    {
+        return min;
+    }
+    return x;
+}
+
+//
+// pisca_led - Velocidade do LED indica o estado
+//
+static void pisca_led(void)
+{
+    float periodo;
+
+    switch(estado)
+    {
+        case ESTADO_RODANDO: periodo = LED_RODANDO_S; break;
+        case ESTADO_FALHA:   periodo = LED_FALHA_S;   break;
+        default:             periodo = LED_PARADO_S;  break;
+    }
+
+    ledCount++;
+    if((float)ledCount * Ts >= periodo)
+    {
+        ledCount = 0;
+        GpioDataRegs.GPATOGGLE.bit.GPIO31 = 1;
+    }
+}
+
+//
 // adca1_isr - Le vo e iL e roda o controle, uma vez por periodo do PWM
 //
 interrupt void adca1_isr(void)
 {
+    falha_t f;
+
     //
     // Depuracao: GPIO18 alterna a cada interrupcao (onda de 1/(2*Ts))
     //
@@ -354,27 +566,65 @@ interrupt void adca1_isr(void)
         bufferFull   = 1;
     }
 
-    //
-    // LED
-    //
-    ledCount++;
-    if(ledCount >= ledToggleCount)
-    {
-        ledCount = 0;
-        GpioDataRegs.GPATOGGLE.bit.GPIO31 = 1;
-    }
+    pisca_led();
 
     //
-    // Controle
+    // Maquina de estados e controle
     //
+    switch(estado)
+    {
+        case ESTADO_PARADO:
+            if(comando)
+            {
+                liga();
+            }
+            break;
+
+        case ESTADO_RODANDO:
+            if(!comando)
+            {
+                desliga();
+                break;
+            }
+
+            f = verifica_falhas();
+            if(f != FALHA_NENHUMA)
+            {
+                entra_falha(f);
+                break;
+            }
+
+            //
+            // Referencias em rampa, limitadas
+            //
+            iL_ref_atual = rampa(iL_ref_atual,
+                                 limita(iL_ref, 0.0f, IL_REF_MAX),
+                                 rampa_iL * Ts);
+            vo_ref_atual = rampa(vo_ref_atual,
+                                 limita(vo_ref, 0.0f, VO_REF_MAX),
+                                 rampa_vo * Ts);
+
 #ifdef FCS_MPC
-    // flag = controlador_fcs_mpc_corrente(vo, iL);
-    flag = controlador_fcs_mpc_tensao(vo, iL);
-    PWM1_SetA(flag);
+            // flag = controlador_fcs_mpc_corrente(vo, iL, iL_ref_atual);
+            flag = controlador_fcs_mpc_tensao(vo, iL, vo_ref_atual);
+            PWM1_SetA(flag);
 #else
-    d = controle(vo, iL);
-    EPwm1Regs.CMPA.bit.CMPA = d * EPWM1_PERIOD;
+            d = controle(vo, iL, vo_ref_atual);
+            EPwm1Regs.CMPA.bit.CMPA = d * EPWM1_PERIOD;
 #endif
+            break;
+
+        case ESTADO_FALHA:
+        default:
+            comando = 0;
+            if(rearme)
+            {
+                rearme = 0;
+                falha  = FALHA_NENHUMA;
+                estado = ESTADO_PARADO;
+            }
+            break;
+    }
 
     //
     // Limpa a flag e trata overflow
