@@ -1,28 +1,48 @@
+//###########################################################################
+//
+// controle.c - Controladores do buck: PI em cascata e FCS-MPC
+//
+// Modelo discreto do buck (Euler, s = 1 chave de cima ligada, s = 0 de baixo):
+//   iL[k+1] = iL[k] + (Ts/L) * (E*s - vo[k])
+//   vo[k+1] = (Ts/C) * iL[k+1] + vo[k] * (1 - Ts/(R*C))
+//
+//###########################################################################
+
+#include "config.h"
 #include "controle.h"
 
-pi_t pi_corrente;
-pi_t pi_tensao;
+//
+// Referencias e limites (alteraveis no Watch)
+//
+volatile float iL_ref   = IL_REF_INICIAL;
+volatile float vo_ref   = VO_REF_INICIAL;
+volatile float iL_limit = FCS_V_IL_LIMITE;
 
-float iL_ref = 1.0;
-float vo_ref = 10.0;
+//
+// Parametros do modelo
+//
+float E = E_ENTRADA;
+float L = L_INDUTOR;
+float C = C_SAIDA;
+float R = R_CARGA;
 
-float iL_limit = 2.0;
+//
+// Constantes do modelo, calculadas em controle_inicializacao() para a ISR
+// so multiplicar (divisao em float e lenta no C28x)
+//
+static float E_Ts_div_L = 0;
+static float Ts_div_L   = 0;
+static float Ts_div_C   = 0;
+static float Ts_div_RC  = 0;
 
-float Tss = 0;
-float E = 50;
-float L = 1.5e-3;
-float R = 15;
-float C = 220e-6;
+static pi_t pi_corrente;
+static pi_t pi_tensao;
 
-float E_Ts_div_L = 0;
-float Ts_div_L   = 0;
-float Ts_div_C   = 0;
-float Ts_div_RC  = 0;
+int sOpt = 0;   // ultimo estado escolhido pelo FCS-MPC
 
-int sOpt = 0;
-
-
-
+//
+// controlador_pi - PI discreto: u = kp*e + ki*soma(e), com ki = KI*Ts
+//
 float controlador_pi(pi_t *pi, float erro)
 {
     float uP;
@@ -35,39 +55,42 @@ float controlador_pi(pi_t *pi, float erro)
     return (uP + uI);
 }
 
-void  controle_inicializacao(float Ts)
+//
+// controle_inicializacao - Ganhos dos PI e constantes do modelo para um Ts
+//
+void controle_inicializacao(float Ts)
 {
-    pi_corrente.kp = 1.0;
-    pi_corrente.ki = 1000 * Ts;
+    pi_corrente.kp       = PI_I_KP;
+    pi_corrente.ki       = PI_I_KI * Ts;
     pi_corrente.integral = 0;
 
-    pi_tensao.kp = 0.1;
-    pi_tensao.ki = 10 * Ts;
+    pi_tensao.kp       = PI_V_KP;
+    pi_tensao.ki       = PI_V_KI * Ts;
     pi_tensao.integral = 0;
 
-    Tss = Ts;
-
-   Ts_div_L   = Ts/L;
-   E_Ts_div_L = E * Ts_div_L;
-   Ts_div_C   = Ts / C;
-   Ts_div_RC  = Ts / (R*C);
-    
+    Ts_div_L   = Ts / L;
+    E_Ts_div_L = E * Ts_div_L;
+    Ts_div_C   = Ts / C;
+    Ts_div_RC  = Ts / (R * C);
 }
 
+//
+// controle - PI em cascata: tensao (externa) -> iL_ref -> corrente -> duty
+//
 float controle(float v, float i)
 {
-    float erro_i; 
+    float erro_i;
 
     iL_ref = controlador_pi(&pi_tensao, vo_ref - v);
     erro_i = iL_ref - i;
 
-    float out = controlador_pi(&pi_corrente, erro_i);
-    
-    return out;
+    return controlador_pi(&pi_corrente, erro_i);
 }
 
-
-
+//
+// controlador_fcs_mpc_corrente - Escolhe o estado que leva iL[k+1] mais
+//                                perto de iL_ref
+//
 int controlador_fcs_mpc_corrente(float vo, float iL)
 {
     int j;
@@ -77,23 +100,26 @@ int controlador_fcs_mpc_corrente(float vo, float iL)
 
     int s[2] = {1, 0};
 
-    for(j=0; j<2; j++)
+    for(j = 0; j < 2; j++)
     {
-         iL_k1 = iL + E_Ts_div_L * (float)s[j] - vo * Ts_div_L;
-         
-         gi = (iL_ref - iL_k1) *  (iL_ref - iL_k1);
-        
-         if(gi < giOpt) {
-            sOpt = s[j];
+        iL_k1 = iL + E_Ts_div_L * (float)s[j] - vo * Ts_div_L;
+
+        gi = (iL_ref - iL_k1) * (iL_ref - iL_k1);
+
+        if(gi < giOpt)
+        {
+            sOpt  = s[j];
             giOpt = gi;
-         }
+        }
     }
 
     return sOpt;
-   
 }
 
-
+//
+// controlador_fcs_mpc_tensao - Compensa o atraso (k+1 com o estado ja
+//                              aplicado) e escolhe o estado para k+2
+//
 int controlador_fcs_mpc_tensao(float vo, float iL)
 {
     int j;
@@ -102,37 +128,36 @@ int controlador_fcs_mpc_tensao(float vo, float iL)
     float vo_k1, vo_k2;
     float iL_ref_v;
     float gvOpt = 1e5;
-    float peso = 0.0;
+    float peso;
 
     int s[2] = {1, 0};
 
-    // com compensação
+    // com compensacao
     iL_k1 = iL + E_Ts_div_L * (float)sOpt - vo * Ts_div_L;
     vo_k1 = Ts_div_C * iL_k1 + vo * (1 - Ts_div_RC);
 
-    // sem compensação
+    // sem compensacao
     // iL_k1 = iL;
     // vo_k1 = vo;
 
     iL_ref_v = vo_ref / R;
-    for(j=0; j<2; j++)
+    for(j = 0; j < 2; j++)
     {
         iL_k2 = iL_k1 + E_Ts_div_L * (float)s[j] - vo_k1 * Ts_div_L;
         vo_k2 = Ts_div_C * iL_k2 + vo_k1 * (1 - Ts_div_RC);
 
-        if (iL_k2 >= iL_limit){
-            peso = 1000;
-        } else {
-            peso = 0.0;
-        }
+        peso = (iL_k2 >= iL_limit) ? FCS_V_PENALIDADE : 0.0f;
 
-         gv = (iL_ref_v - iL_k2)*(iL_ref_v - iL_k2) + 2*(vo_ref - vo_k2)*(vo_ref - vo_k2) + peso;
-        
-         if(gv < gvOpt) {
-            sOpt = s[j];
+        gv = FCS_V_PESO_I * (iL_ref_v - iL_k2) * (iL_ref_v - iL_k2)
+           + FCS_V_PESO_V * (vo_ref - vo_k2) * (vo_ref - vo_k2)
+           + peso;
+
+        if(gv < gvOpt)
+        {
+            sOpt  = s[j];
             gvOpt = gv;
-         }
+        }
     }
+
     return sOpt;
-   
 }
