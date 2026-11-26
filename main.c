@@ -14,7 +14,8 @@
 //
 // Chaves desligadas = trip one-shot do ePWM1 (EPWM1A e EPWM1B em 0, depois
 // do tempo morto). O trip tambem dispara sozinho se a CPU for parada pelo
-// depurador (TZ6) ou se o relogio falhar (TZ5).
+// depurador (TZ6), se o relogio falhar (TZ5) ou se o comparador CMPSS1
+// detectar iL > IL_MAX_HW (sem passar pela CPU).
 //
 // Baseado no exemplo adc_soc_epwm (F2837xD Support Library v210 - TI)
 //
@@ -51,7 +52,8 @@ typedef enum {
     FALHA_SOBRETENSAO   = 2,    // vo > VO_MAX (software)
     FALHA_DEPURADOR     = 3,    // CPU parada pelo depurador (TZ6)
     FALHA_RELOGIO       = 4,    // falha do relogio (TZ5)
-    FALHA_TRIP          = 5     // outro trip do ePWM1
+    FALHA_TRIP          = 5,    // outro trip do ePWM1
+    FALHA_SOBRECORRENTE_HW = 6  // iL > IL_MAX_HW (comparador CMPSS1)
 } falha_t;
 
 //
@@ -99,6 +101,7 @@ static Uint16 ledCount;
 //
 void ConfigureADC(void);
 void SetupADCEpwm(void);
+void ConfigureCMPSS(void);
 void ConfigureEPWM(void);
 void configurePWM_GPIOs(void);
 void StartEPWM(void);
@@ -174,6 +177,7 @@ void main(void)
     CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 0;
     EDIS;
 
+    ConfigureCMPSS();
     ConfigureEPWM();
     aplica_modo(modo);
     controle_inicializacao(Ts);
@@ -273,6 +277,57 @@ void SetupADCEpwm(void)
 }
 
 //
+// ConfigureCMPSS - Comparador alto do CMPSS1: CMPIN1P (ADCINA2, corrente)
+//                  contra o DAC interno em IL_MAX_HW. A saida filtrada vai
+//                  para o TRIP4 do ePWM X-BAR (usado em ConfigureEPWM).
+//
+void ConfigureCMPSS(void)
+{
+    Uint16 dac;
+
+    //
+    // IL_MAX_HW em contagens do ADC, convertido para a escala do DAC
+    //
+    dac = (Uint16)((IL_MAX_HW / KADC_I) * (ADC_VREFHI / CMPSS_VREF));
+    if(dac > 4095U)
+    {
+        dac = 4095U;
+    }
+
+    EALLOW;
+
+    Cmpss1Regs.COMPCTL.bit.COMPDACE    = 1;     // liga comparador e DAC
+    Cmpss1Regs.COMPCTL.bit.COMPHSOURCE = 0;     // entrada - = DAC interno
+    Cmpss1Regs.COMPCTL.bit.COMPHINV    = 0;     // saida em 1 com iL > limite
+    Cmpss1Regs.COMPHYSCTL.bit.COMPHYS  = 2;     // histerese (2x a tipica)
+
+    Cmpss1Regs.COMPDACCTL.bit.SELREF    = 0;    // referencia do DAC = VDDA
+    Cmpss1Regs.COMPDACCTL.bit.DACSOURCE = 0;    // valor de DACHVALS
+    Cmpss1Regs.COMPDACCTL.bit.SWLOADSEL = 0;    // carrega a cada SYSCLK
+    Cmpss1Regs.DACHVALS.bit.DACVAL      = dac;
+
+    //
+    // Filtro digital contra ruido de comutacao: 10 amostras a SYSCLK/10
+    // (janela de 1 us com SYSCLK = 100 MHz), trip com 7 ou mais em 1
+    //
+    Cmpss1Regs.CTRIPHFILCLKCTL.bit.CLKPRESCALE = 9;
+    Cmpss1Regs.CTRIPHFILCTL.bit.SAMPWIN        = 9;
+    Cmpss1Regs.CTRIPHFILCTL.bit.THRESH         = 7;
+    Cmpss1Regs.CTRIPHFILCTL.bit.FILINIT        = 1;
+
+    Cmpss1Regs.COMPCTL.bit.CTRIPHSEL    = 2;    // CTRIPH = saida do filtro
+    Cmpss1Regs.COMPCTL.bit.CTRIPOUTHSEL = 2;
+
+    //
+    // ePWM X-BAR: TRIP4 = CMPSS1.CTRIPH (mux 0, opcao 0)
+    //
+    EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX0 = 0;
+    EPwmXbarRegs.TRIP4MUXENABLE.bit.MUX0   = 1;
+
+    EDIS;
+}
+
+//
 // configurePWM_GPIOs - GPIO0 = EPWM1A, GPIO1 = EPWM1B
 //
 void configurePWM_GPIOs(void)
@@ -332,10 +387,21 @@ void ConfigureEPWM(void)
     EPwm1Regs.DBFED.bit.DBFED    = PWM_TEMPO_MORTO;
 
     //
+    // Digital compare: DCAH = TRIPIN4 (CMPSS1, sobrecorrente); DCAEVT1
+    // quando DCAH = 1, assincrono e sem filtro do DC
+    //
+    EPwm1Regs.DCTRIPSEL.bit.DCAHCOMPSEL  = 3;   // TRIPIN4
+    EPwm1Regs.TZDCSEL.bit.DCAEVT1        = 2;   // DCAH em 1
+    EPwm1Regs.DCACTL.bit.EVT1SRCSEL      = 0;
+    EPwm1Regs.DCACTL.bit.EVT1FRCSYNCSEL  = 1;
+
+    //
     // Trip zone: A e B em 0 (atua depois do tempo morto, entao desliga as
     // duas chaves). Fontes one-shot: TZ5 = falha do relogio, TZ6 = CPU
-    // parada pelo depurador. Comeca com o trip forcado (chaves desligadas).
+    // parada pelo depurador, DCAEVT1 = sobrecorrente no CMPSS1. Comeca com
+    // o trip forcado (chaves desligadas).
     //
+    EPwm1Regs.TZSEL.bit.DCAEVT1 = 1;
     EPwm1Regs.TZCTL.bit.TZA     = 2;        // trip: EPWM1A em 0
     EPwm1Regs.TZCTL.bit.TZB     = 2;        // trip: EPWM1B em 0
     EPwm1Regs.TZCTL.bit.DCAEVT1 = 3;        // eventos do digital compare
@@ -439,9 +505,10 @@ static void liga(void)
     flag = 0;
 
     EALLOW;
-    EPwm1Regs.TZOSTCLR.all   = 0x00FF;  // limpa as origens do trip (TZ6 etc.)
-    EPwm1Regs.TZCLR.bit.OST  = 1;       // libera as saidas
-    EPwm1Regs.TZCLR.bit.INT  = 1;
+    EPwm1Regs.TZOSTCLR.all      = 0x00FF;   // limpa as origens do trip
+    EPwm1Regs.TZCLR.bit.DCAEVT1 = 1;
+    EPwm1Regs.TZCLR.bit.OST     = 1;        // libera as saidas
+    EPwm1Regs.TZCLR.bit.INT     = 1;
     EDIS;
 
     estado = ESTADO_RODANDO;
@@ -492,6 +559,10 @@ static falha_t verifica_falhas(void)
 {
     if(EPwm1Regs.TZFLG.bit.OST)
     {
+        if(EPwm1Regs.TZOSTFLG.bit.DCAEVT1)
+        {
+            return FALHA_SOBRECORRENTE_HW;
+        }
         if(EPwm1Regs.TZOSTFLG.bit.OST6)
         {
             return FALHA_DEPURADOR;

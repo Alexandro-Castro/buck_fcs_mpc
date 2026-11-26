@@ -67,6 +67,20 @@
 #define VO_MAX              30.0f       // V
 
 //---------------------------------------------------------------------------
+// Protecao de sobrecorrente por hardware: comparador CMPSS1 no mesmo pino
+// da corrente (ADCINA2 = CMPIN1P) -> ePWM X-BAR TRIP4 -> trip one-shot do
+// ePWM1, sem passar pela CPU. Compara a corrente instantanea (com ripple),
+// por isso o limite fica acima de IL_MAX.
+//
+// O DAC do comparador usa VDDA (3,3 V) e o ADC usa VREFHI (3,0 V na
+// LaunchPad F28379D, REF5030). Se VREFHI for 3,3 V na sua placa, o trip
+// acontece ~9 % abaixo de IL_MAX_HW (lado seguro).
+//---------------------------------------------------------------------------
+#define IL_MAX_HW           3.0f        // A
+#define ADC_VREFHI          3.0f        // V
+#define CMPSS_VREF          3.3f        // V (VDDA)
+
+//---------------------------------------------------------------------------
 // PI em cascata (ki = KI * Ts)
 //---------------------------------------------------------------------------
 #define PI_I_KP             1.0f
