@@ -5,7 +5,7 @@
             <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Debug.2121059750" moduleId="org.eclipse.cdt.core.settings" name="CPU1_RAM">
                 <macros>
                     <stringMacro name="ORIGINAL_PROJECT_ROOT" type="VALUE_PATH_ANY" value="C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_examples_Cpu1/adc_soc_epwm/cpu01/ccs"/>
-                    <stringMacro name="INSTALLROOT_F2837XD" type="VALUE_PATH_DIR" value="C:/ti/C2000Ware_26_01_00_00/device_support/f2837xd"/>
+                    <stringMacro name="INSTALLROOT_F2837XD" type="VALUE_PATH_DIR" value="${COM_TI_C2000WARE_INSTALL_DIR}/device_support/f2837xd"/>
                 </macros>
                 <externalSettings/>
                 <extensions>
@@ -30,12 +30,12 @@
                                 <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
                                 <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
                                 <listOptionValue value="OUTPUT_TYPE=executable"/>
-                                <listOptionValue value="PRODUCTS="/>
-                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={}"/>
+                                <listOptionValue value="PRODUCTS=C2000WARE:26.1.0.00;"/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={&quot;C2000WARE&quot;:[&quot;${COM_TI_C2000WARE_INCLUDE_PATH}&quot;,&quot;${COM_TI_C2000WARE_LIBRARY_PATH}&quot;,&quot;${COM_TI_C2000WARE_LIBRARIES}&quot;,&quot;${COM_TI_C2000WARE_SYMBOLS}&quot;,&quot;${COM_TI_C2000WARE_SYSCONFIG_MANIFEST}&quot;]}"/>
                             </option>
                             <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.649274559" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
                             <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.638307461" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
-                            <builder buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.288188470" name="GNU Make.CPU1_RAM" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <builder buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.288188470" keepEnvironmentInBuildfile="false" name="GNU Make" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
                             <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.5879683" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.298391976" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.28" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.1892593828" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
@@ -45,12 +45,14 @@
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.479435775" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.tmu0" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.1843371171" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.vcu2" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH.303530755" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${COM_TI_C2000WARE_INCLUDE_PATH}"/>
                                     <listOptionValue value="${CG_TOOL_ROOT}/include"/>
                                     <listOptionValue value="${INSTALLROOT_F2837XD}/headers/include"/>
                                     <listOptionValue value="${INSTALLROOT_F2837XD}/common/include"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEBUGGING_MODEL.1661486433" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEBUGGING_MODEL" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEBUGGING_MODEL.SYMDEBUG__DWARF" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE.1646321773" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="${COM_TI_C2000WARE_SYMBOLS}"/>
                                     <listOptionValue value="CPU1"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER.2127322895" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
@@ -67,12 +69,14 @@
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE.1781276031" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE" value="${ProjName}.out" valueType="string"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE.356300633" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE" value="0x100" valueType="string"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY.1797515945" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY" valueType="libs">
+                                    <listOptionValue value="${COM_TI_C2000WARE_LIBRARIES}"/>
                                     <listOptionValue value="rts2800_fpu32.lib"/>
                                     <listOptionValue value="2837xD_RAM_lnk_cpu1.cmd"/>
                                     <listOptionValue value="F2837xD_Headers_nonBIOS_cpu1.cmd"/>
                                     <listOptionValue value="libc.a"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH.1943101849" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH" valueType="libPaths">
+                                    <listOptionValue value="${COM_TI_C2000WARE_LIBRARY_PATH}"/>
                                     <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
                                     <listOptionValue value="${CG_TOOL_ROOT}/include"/>
                                     <listOptionValue value="${INSTALLROOT_F2837XD}/common/cmd"/>
@@ -95,7 +99,7 @@
             <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Debug.2121059750.2104318735" moduleId="org.eclipse.cdt.core.settings" name="CPU1_FLASH">
                 <macros>
                     <stringMacro name="ORIGINAL_PROJECT_ROOT" type="VALUE_PATH_ANY" value="C:/ti/controlSUITE/device_support/F2837xD/v210/F2837xD_examples_Cpu1/adc_soc_epwm/cpu01/ccs"/>
-                    <stringMacro name="INSTALLROOT_F2837XD" type="VALUE_PATH_DIR" value="C:/ti/C2000Ware_26_01_00_00/device_support/f2837xd"/>
+                    <stringMacro name="INSTALLROOT_F2837XD" type="VALUE_PATH_DIR" value="${COM_TI_C2000WARE_INSTALL_DIR}/device_support/f2837xd"/>
                 </macros>
                 <externalSettings/>
                 <extensions>
@@ -119,6 +123,8 @@
                                 <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
                                 <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
                                 <listOptionValue value="OUTPUT_TYPE=executable"/>
+                                <listOptionValue value="PRODUCTS=C2000WARE:26.1.0.00;"/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={&quot;C2000WARE&quot;:[&quot;${COM_TI_C2000WARE_INCLUDE_PATH}&quot;,&quot;${COM_TI_C2000WARE_LIBRARY_PATH}&quot;,&quot;${COM_TI_C2000WARE_LIBRARIES}&quot;,&quot;${COM_TI_C2000WARE_SYMBOLS}&quot;,&quot;${COM_TI_C2000WARE_SYSCONFIG_MANIFEST}&quot;]}"/>
                             </option>
                             <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.35780789" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="15.12.1.LTS" valueType="string"/>
                             <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_15.12.exe.targetPlatformDebug.168432365" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.exe.targetPlatformDebug"/>
@@ -132,12 +138,14 @@
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.TMU_SUPPORT.334176297" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.TMU_SUPPORT.tmu0" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.VCU_SUPPORT.1746551602" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.VCU_SUPPORT.vcu2" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.INCLUDE_PATH.1042839909" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.INCLUDE_PATH" valueType="includePath">
-                                    <listOptionValue value="&quot;${CG_TOOL_ROOT}/include&quot;"/>
-                                    <listOptionValue value="&quot;${INSTALLROOT_F2837XD}/headers/include&quot;"/>
-                                    <listOptionValue value="&quot;${INSTALLROOT_F2837XD}/common/include&quot;"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_INCLUDE_PATH}"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                    <listOptionValue value="${INSTALLROOT_F2837XD}/headers/include"/>
+                                    <listOptionValue value="${INSTALLROOT_F2837XD}/common/include"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.DEBUGGING_MODEL.1385517197" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.DEBUGGING_MODEL" value="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.DEBUGGING_MODEL.SYMDEBUG__DWARF" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.DEFINE.2126220584" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="${COM_TI_C2000WARE_SYMBOLS}"/>
                                     <listOptionValue value="CPU1"/>
                                     <listOptionValue value="_FLASH"/>
                                 </option>
@@ -158,16 +166,18 @@
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.MAP_FILE.2131617187" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.MAP_FILE" value="&quot;${ProjName}.map&quot;" valueType="string"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.STACK_SIZE.1016204702" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.STACK_SIZE" value="0x100" valueType="string"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.LIBRARY.1741374795" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.LIBRARY" valueType="libs">
-                                    <listOptionValue value="&quot;rts2800_fpu32.lib&quot;"/>
-                                    <listOptionValue value="&quot;2837xD_FLASH_lnk_cpu1.cmd&quot;"/>
-                                    <listOptionValue value="&quot;F2837xD_Headers_nonBIOS_cpu1.cmd&quot;"/>
-                                    <listOptionValue value="&quot;libc.a&quot;"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_LIBRARIES}"/>
+                                    <listOptionValue value="rts2800_fpu32.lib"/>
+                                    <listOptionValue value="2837xD_FLASH_lnk_cpu1.cmd"/>
+                                    <listOptionValue value="F2837xD_Headers_nonBIOS_cpu1.cmd"/>
+                                    <listOptionValue value="libc.a"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.SEARCH_PATH.2024494782" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.SEARCH_PATH" valueType="libPaths">
-                                    <listOptionValue value="&quot;${CG_TOOL_ROOT}/lib&quot;"/>
-                                    <listOptionValue value="&quot;${CG_TOOL_ROOT}/include&quot;"/>
-                                    <listOptionValue value="&quot;${INSTALLROOT_F2837XD}/common/cmd&quot;"/>
-                                    <listOptionValue value="&quot;${INSTALLROOT_F2837XD}/headers/cmd&quot;"/>
+                                    <listOptionValue value="${COM_TI_C2000WARE_LIBRARY_PATH}"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                    <listOptionValue value="${INSTALLROOT_F2837XD}/common/cmd"/>
+                                    <listOptionValue value="${INSTALLROOT_F2837XD}/headers/cmd"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.DISPLAY_ERROR_NUMBER.463606933" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.XML_LINK_INFO.1084900631" superClass="com.ti.ccstudio.buildDefinitions.C2000_15.12.linkerID.XML_LINK_INFO" value="&quot;${ProjName}_linkInfo.xml&quot;" valueType="string"/>
