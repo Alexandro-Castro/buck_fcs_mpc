@@ -2,9 +2,24 @@
 //
 // controle.c - Controladores do buck: PI em cascata e FCS-MPC
 //
-// Modelo discreto do buck (Euler, s = 1 chave de cima ligada, s = 0 de baixo):
-//   iL[k+1] = iL[k] + (Ts/L) * (E*s - vo[k])
-//   vo[k+1] = (Ts/C) * iL[k+1] + vo[k] * (1 - Ts/(R*C))
+// Modelo do buck (s = 1 chave de cima ligada, s = 0 de baixo), num
+// intervalo dt com o estado s constante:
+//   iL(t+dt) = iL + (dt/L) * (E*s - vo)                    (corrente linear)
+//   vo(t+dt) = vo + (dt/C) * (iL + di/2 - vo/R)            (corrente media)
+//
+// Timing do PWM no FCS (contador up-down, periodo Ts):
+//
+//   zero         topo          zero          topo          zero
+//    |-- s_atual --|-- s_atual --|--- s novo ---|--- s novo ---|
+//                  ^ amostra e   ^ s novo entra               ^ instante
+//                    decisao       (forca carrega em CTR = 0)   avaliado
+//
+// A amostra cai no meio do intervalo, e o estado decidido so entra no zero
+// seguinte, Ts/2 depois. Por isso os FCS primeiro levam o estado medido ate
+// esse zero com o estado que ja esta aplicado (compensacao do atraso) e
+// depois avaliam cada candidato no fim do intervalo seguinte, no instante
+// de comutacao. Os picos e vales do ripple ficam centrados na referencia,
+// e a media da corrente fica na referencia em regime.
 //
 //###########################################################################
 
@@ -22,7 +37,7 @@ volatile float iL_limit = FCS_V_IL_LIMITE;
 volatile float iL_ref_pi = 0;
 
 //
-// Parametros do modelo
+// Parametros do modelo (alteraveis no Watch; valem na proxima partida)
 //
 float E = E_ENTRADA;
 float L = L_INDUTOR;
@@ -33,15 +48,16 @@ float R = R_CARGA;
 // Constantes do modelo, calculadas em controle_inicializacao() para a ISR
 // so multiplicar (divisao em float e lenta no C28x)
 //
-static float E_Ts_div_L = 0;
-static float Ts_div_L   = 0;
-static float Ts_div_C   = 0;
-static float Ts_div_RC  = 0;
+static float Ts_div_L = 0;      // Ts/L
+static float Ts_div_C = 0;      // Ts/C
+static float Th_div_L = 0;      // (Ts/2)/L
+static float Th_div_C = 0;      // (Ts/2)/C
+static float G        = 0;      // 1/R
 
 static pi_t pi_corrente;
 static pi_t pi_tensao;
 
-int sOpt = 0;   // ultimo estado escolhido pelo FCS-MPC
+int sOpt = 0;   // estado aplicado no intervalo atual (ultima decisao)
 
 //
 // controlador_pi - PI discreto: u = kp*e + ki*soma(e), com ki = KI*Ts
@@ -59,7 +75,9 @@ float controlador_pi(pi_t *pi, float erro)
 }
 
 //
-// controle_inicializacao - Ganhos dos PI e constantes do modelo para um Ts
+// controle_inicializacao - Ganhos dos PI e constantes do modelo para um Ts.
+//                          Chamada a cada partida, com a chave de cima
+//                          desligada (sOpt = 0).
 //
 void controle_inicializacao(float Ts)
 {
@@ -74,10 +92,11 @@ void controle_inicializacao(float Ts)
     iL_ref_pi = 0;
     sOpt      = 0;
 
-    Ts_div_L   = Ts / L;
-    E_Ts_div_L = E * Ts_div_L;
-    Ts_div_C   = Ts / C;
-    Ts_div_RC  = Ts / (R * C);
+    Ts_div_L = Ts / L;
+    Ts_div_C = Ts / C;
+    Th_div_L = 0.5f * Ts_div_L;
+    Th_div_C = 0.5f * Ts_div_C;
+    G        = 1.0f / R;
 }
 
 //
@@ -94,76 +113,89 @@ float controle(float v, float i, float vo_ref)
 }
 
 //
-// controlador_fcs_mpc_corrente - Escolhe o estado que leva iL[k+1] mais
-//                                perto de iL_ref
+// controlador_fcs_mpc_corrente - Escolhe o estado que deixa a corrente no
+//                                fim do proximo intervalo mais perto de
+//                                iL_ref
 //
 int controlador_fcs_mpc_corrente(float vo, float iL, float iL_ref)
 {
     int j;
-    float gi;
-    float iL_k1;
-    float giOpt = 1e5;
+    float g;
+    float iz;
+    float ie;
+    float gOpt = 1e30f;
+    int sNovo  = 0;
 
-    int s[2] = {1, 0};
+    const int s[2] = {1, 0};
+
+    //
+    // Compensacao do atraso: corrente no proximo zero, com o estado atual
+    //
+    iz = iL + (E * (float)sOpt - vo) * Th_div_L;
 
     for(j = 0; j < 2; j++)
     {
-        iL_k1 = iL + E_Ts_div_L * (float)s[j] - vo * Ts_div_L;
+        ie = iz + (E * (float)s[j] - vo) * Ts_div_L;
 
-        gi = (iL_ref - iL_k1) * (iL_ref - iL_k1);
+        g = (iL_ref - ie) * (iL_ref - ie);
 
-        if(gi < giOpt)
+        if(g < gOpt)
         {
-            sOpt  = s[j];
-            giOpt = gi;
+            sNovo = s[j];
+            gOpt  = g;
         }
     }
 
+    sOpt = sNovo;
     return sOpt;
 }
 
 //
-// controlador_fcs_mpc_tensao - Compensa o atraso (k+1 com o estado ja
-//                              aplicado) e escolhe o estado para k+2
+// controlador_fcs_mpc_tensao - Mesma predicao, com custo na tensao e na
+//                              corrente (referencia vo_ref/R) e penalidade
+//                              de sobrecorrente
 //
 int controlador_fcs_mpc_tensao(float vo, float iL, float vo_ref)
 {
     int j;
-    float gv;
-    float iL_k1, iL_k2;
-    float vo_k1, vo_k2;
+    float g;
+    float di, iz, vz;
+    float ie, ve;
     float iL_ref_v;
-    float gvOpt = 1e5;
     float peso;
+    float gOpt = 1e30f;
+    int sNovo  = 0;
 
-    int s[2] = {1, 0};
+    const int s[2] = {1, 0};
 
-    // com compensacao
-    iL_k1 = iL + E_Ts_div_L * (float)sOpt - vo * Ts_div_L;
-    vo_k1 = Ts_div_C * iL_k1 + vo * (1 - Ts_div_RC);
+    //
+    // Compensacao do atraso: estado no proximo zero, com o estado atual
+    //
+    di = (E * (float)sOpt - vo) * Th_div_L;
+    iz = iL + di;
+    vz = vo + (iL + 0.5f * di - vo * G) * Th_div_C;
 
-    // sem compensacao
-    // iL_k1 = iL;
-    // vo_k1 = vo;
+    iL_ref_v = vo_ref * G;
 
-    iL_ref_v = vo_ref / R;
     for(j = 0; j < 2; j++)
     {
-        iL_k2 = iL_k1 + E_Ts_div_L * (float)s[j] - vo_k1 * Ts_div_L;
-        vo_k2 = Ts_div_C * iL_k2 + vo_k1 * (1 - Ts_div_RC);
+        di = (E * (float)s[j] - vz) * Ts_div_L;
+        ie = iz + di;
+        ve = vz + (iz + 0.5f * di - vz * G) * Ts_div_C;
 
-        peso = (iL_k2 >= iL_limit) ? FCS_V_PENALIDADE : 0.0f;
+        peso = (ie >= iL_limit) ? FCS_V_PENALIDADE : 0.0f;
 
-        gv = FCS_V_PESO_I * (iL_ref_v - iL_k2) * (iL_ref_v - iL_k2)
-           + FCS_V_PESO_V * (vo_ref - vo_k2) * (vo_ref - vo_k2)
-           + peso;
+        g = FCS_V_PESO_I * (iL_ref_v - ie) * (iL_ref_v - ie)
+          + FCS_V_PESO_V * (vo_ref - ve) * (vo_ref - ve)
+          + peso;
 
-        if(gv < gvOpt)
+        if(g < gOpt)
         {
-            sOpt  = s[j];
-            gvOpt = gv;
+            sNovo = s[j];
+            gOpt  = g;
         }
     }
 
+    sOpt = sNovo;
     return sOpt;
 }

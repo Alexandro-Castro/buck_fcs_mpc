@@ -15,3 +15,6 @@ Release/
 .clangd
 .theia/
 .codex/
+
+# Python
+__pycache__/
