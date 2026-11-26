@@ -408,8 +408,9 @@ interrupt void adca1_isr(void)
     //flag = !flag;
 
     //PWM1_SetA(flag);
-    flag = controlador_fcs_mpc_corrente(vo, iL);
-    //flag = controlador_fcs_mpc_tensao  (vo, iL);
+    // flag = controlador_fcs_mpc_corrente(vo, iL);
+
+    flag = controlador_fcs_mpc_tensao  (vo, iL);
     PWM1_SetA(flag);
 #else
     d = controle(vo, iL);

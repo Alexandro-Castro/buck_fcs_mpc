@@ -6,6 +6,8 @@ pi_t pi_tensao;
 float iL_ref = 1.0;
 float vo_ref = 10.0;
 
+float iL_limit = 2.0;
+
 float Tss = 0;
 float E = 50;
 float L = 1.5e-3;
@@ -100,29 +102,37 @@ int controlador_fcs_mpc_tensao(float vo, float iL)
     float vo_k1, vo_k2;
     float iL_ref_v;
     float gvOpt = 1e5;
+    float peso = 0.0;
 
     int s[2] = {1, 0};
 
+    // com compensação
     iL_k1 = iL + E_Ts_div_L * (float)sOpt - vo * Ts_div_L;
     vo_k1 = Ts_div_C * iL_k1 + vo * (1 - Ts_div_RC);
-    //iL_k1 = iL;
-    //vo_k1 = vo;
 
+    // sem compensação
+    // iL_k1 = iL;
+    // vo_k1 = vo;
+
+    iL_ref_v = vo_ref / R;
     for(j=0; j<2; j++)
     {
-         iL_k2 = iL_k1 + E_Ts_div_L * (float)s[j] - vo_k1 * Ts_div_L;
-         vo_k2 = Ts_div_C * iL_k2 + vo_k1 * (1 - Ts_div_RC);
+        iL_k2 = iL_k1 + E_Ts_div_L * (float)s[j] - vo_k1 * Ts_div_L;
+        vo_k2 = Ts_div_C * iL_k2 + vo_k1 * (1 - Ts_div_RC);
 
-         iL_ref_v = vo_ref / R;
+        if (iL_k2 >= iL_limit){
+            peso = 1000;
+        } else {
+            peso = 0.0;
+        }
 
-         gv = 1*(iL_ref_v - iL_k2)*(iL_ref_v - iL_k2) + 2*(vo_ref - vo_k2)*(vo_ref - vo_k2);
+         gv = (iL_ref_v - iL_k2)*(iL_ref_v - iL_k2) + 2*(vo_ref - vo_k2)*(vo_ref - vo_k2) + peso;
         
          if(gv < gvOpt) {
             sOpt = s[j];
             gvOpt = gv;
          }
     }
-
     return sOpt;
    
 }
