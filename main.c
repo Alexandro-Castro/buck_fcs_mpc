@@ -7,6 +7,7 @@
 // do ADC, uma vez por periodo do PWM.
 //
 // Operacao pelo Watch (Expressions) do CCS:
+//   modo    = 0 PI, 1 FCS de corrente, 2 FCS de tensao (vale ao ligar)
 //   comando = 1  liga o controle; comando = 0 desliga (chaves abertas)
 //   rearme  = 1  sai do estado de falha (volta a parado)
 //   estado, falha, iL_falha, vo_falha mostram o que aconteceu
@@ -24,19 +25,14 @@
 #include "controle.h"
 
 //
-// Periodo do PWM e de amostragem
+// Controlador e periodo do PWM. Ts = periodo de amostragem = periodo do
+// PWM up-down (uma ISR por periodo); o modelo do FCS-MPC precisa do valor
+// exato. Os tres sao atualizados por aplica_modo() a cada partida.
 //
-#ifdef FCS_MPC
-#define EPWM1_PERIOD        TBPRD_FCS
-#else
-#define EPWM1_PERIOD        TBPRD_PI
-#endif
-
-//
-// Periodo de amostragem = periodo do PWM up-down (uma ISR por periodo).
-// O modelo de predicao do FCS-MPC precisa deste valor exato.
-//
-float Ts = 2.0f * EPWM1_PERIOD / TBCLK_HZ;      // FCS: 25 us; PI: 50 us
+volatile modo_t modo       = MODO_INICIAL;  // escolhido no Watch
+volatile modo_t modo_ativo = MODO_INICIAL;  // em uso
+static Uint16 tbprd = TBPRD_FCS;
+float Ts            = 2.0f * TBPRD_FCS / TBCLK_HZ;   // FCS: 25 us; PI: 50 us
 
 #define RESULTS_BUFFER_SIZE 256
 
@@ -107,6 +103,7 @@ void ConfigureEPWM(void);
 void configurePWM_GPIOs(void);
 void StartEPWM(void);
 static inline void PWM1_SetA(Uint16 on);
+static void aplica_modo(modo_t m);
 static void liga(void);
 static void desliga(void);
 static void entra_falha(falha_t f);
@@ -170,8 +167,6 @@ void main(void)
     ConfigureADC();
     SetupADCEpwm();
 
-    controle_inicializacao(Ts);
-
     //
     // ePWM (com os clocks de base de tempo travados), ja com o trip ativo
     //
@@ -180,6 +175,8 @@ void main(void)
     EDIS;
 
     ConfigureEPWM();
+    aplica_modo(modo);
+    controle_inicializacao(Ts);
 
     //
     // Buffers e LED
@@ -309,7 +306,7 @@ void ConfigureEPWM(void)
     EPwm1Regs.TBCTL.bit.PHSEN     = 0;
     EPwm1Regs.TBPHS.bit.TBPHS     = 0;
     EPwm1Regs.TBCTR               = 0;
-    EPwm1Regs.TBPRD               = EPWM1_PERIOD;
+    EPwm1Regs.TBPRD               = tbprd;  // shadow: carrega em CTR = 0
 
     //
     // Comparador A (shadow, carrega em CTR = 0)
@@ -319,28 +316,11 @@ void ConfigureEPWM(void)
     EPwm1Regs.CMPA.bit.CMPA        = 0;
 
     //
-    // Action qualifier
+    // Action qualifier: as acoes dependem do modo (aplica_modo). A forca
+    // por software (AQCSFRC) carrega em CTR = 0 (RLDCSF = 3 seria imediato).
     //
-#ifdef FCS_MPC
-    //
-    // FCS: sem acoes; o estado da chave e forcado por software (AQCSFRC)
-    //
-    EPwm1Regs.AQCTLA.bit.ZRO = 0;
-    EPwm1Regs.AQCTLA.bit.PRD = 0;
-    EPwm1Regs.AQCTLA.bit.CAU = 0;
-    EPwm1Regs.AQCTLA.bit.CAD = 0;
-
-    EPwm1Regs.AQSFRC.bit.RLDCSF = 0;        // forca carrega em CTR = 0 (3 = imediato)
+    EPwm1Regs.AQSFRC.bit.RLDCSF = 0;
     EPwm1Regs.AQCSFRC.bit.CSFA  = 1;        // EPWM1A comeca em nivel baixo
-#else
-    //
-    // PI: up-down simetrico, A alto em torno do zero. Duty de A = CMPA / TBPRD
-    //
-    EPwm1Regs.AQCTLA.bit.ZRO = 0;
-    EPwm1Regs.AQCTLA.bit.PRD = 0;
-    EPwm1Regs.AQCTLA.bit.CAU = 1;           // clear em CMPA subindo
-    EPwm1Regs.AQCTLA.bit.CAD = 2;           // set em CMPA descendo
-#endif
 
     //
     // Tempo morto: B complementar de A
@@ -401,10 +381,56 @@ void StartEPWM(void)
 }
 
 //
-// liga - Reinicia o controle e libera as chaves (PARADO -> RODANDO)
+// aplica_modo - Periodo do PWM, Ts e action qualifier do controlador m.
+//               Chamada so com as chaves desligadas (trip ativo).
+//
+static void aplica_modo(modo_t m)
+{
+    if(m > MODO_FCS_TENSAO)
+    {
+        m    = MODO_FCS_TENSAO;     // valor invalido no Watch
+        modo = m;
+    }
+    modo_ativo = m;
+
+    tbprd = (m == MODO_PI) ? TBPRD_PI : TBPRD_FCS;
+    Ts    = 2.0f * tbprd / TBCLK_HZ;
+
+    EPwm1Regs.TBPRD         = tbprd;    // shadow: carrega em CTR = 0
+    EPwm1Regs.CMPA.bit.CMPA = 0;
+
+    if(m == MODO_PI)
+    {
+        //
+        // PI: up-down simetrico, A alto em torno do zero, duty = CMPA/TBPRD.
+        // Sem forca por software: quem manda e o action qualifier.
+        //
+        EPwm1Regs.AQCTLA.bit.ZRO  = 0;
+        EPwm1Regs.AQCTLA.bit.PRD  = 0;
+        EPwm1Regs.AQCTLA.bit.CAU  = 1;      // clear em CMPA subindo
+        EPwm1Regs.AQCTLA.bit.CAD  = 2;      // set em CMPA descendo
+        EPwm1Regs.AQCSFRC.bit.CSFA = 0;
+    }
+    else
+    {
+        //
+        // FCS: sem acoes; o estado da chave e forcado por software
+        //
+        EPwm1Regs.AQCTLA.bit.ZRO  = 0;
+        EPwm1Regs.AQCTLA.bit.PRD  = 0;
+        EPwm1Regs.AQCTLA.bit.CAU  = 0;
+        EPwm1Regs.AQCTLA.bit.CAD  = 0;
+        EPwm1Regs.AQCSFRC.bit.CSFA = PWM_LOW;
+    }
+}
+
+//
+// liga - Aplica o modo, reinicia o controle e libera as chaves
+//        (PARADO -> RODANDO)
 //
 static void liga(void)
 {
+    aplica_modo(modo);
     controle_inicializacao(Ts);
 
     iL_ref_atual = 0;       // corrente parte de zero
@@ -433,7 +459,10 @@ static void desliga(void)
     //
     // Deixa o PWM em 0 para a proxima partida nao comecar com A em 1
     //
-    PWM1_SetA(0);
+    if(modo_ativo != MODO_PI)
+    {
+        PWM1_SetA(0);
+    }
     EPwm1Regs.CMPA.bit.CMPA = 0;
     d    = 0;
     flag = 0;
@@ -604,14 +633,24 @@ interrupt void adca1_isr(void)
                                  limita(vo_ref, 0.0f, VO_REF_MAX),
                                  rampa_vo * Ts);
 
-#ifdef FCS_MPC
-            // flag = controlador_fcs_mpc_corrente(vo, iL, iL_ref_atual);
-            flag = controlador_fcs_mpc_tensao(vo, iL, vo_ref_atual);
-            PWM1_SetA(flag);
-#else
-            d = controle(vo, iL, vo_ref_atual);
-            EPwm1Regs.CMPA.bit.CMPA = d * EPWM1_PERIOD;
-#endif
+            switch(modo_ativo)
+            {
+                case MODO_PI:
+                    d = controle(vo, iL, vo_ref_atual);
+                    EPwm1Regs.CMPA.bit.CMPA = d * tbprd;
+                    break;
+
+                case MODO_FCS_CORRENTE:
+                    flag = controlador_fcs_mpc_corrente(vo, iL, iL_ref_atual);
+                    PWM1_SetA(flag);
+                    break;
+
+                case MODO_FCS_TENSAO:
+                default:
+                    flag = controlador_fcs_mpc_tensao(vo, iL, vo_ref_atual);
+                    PWM1_SetA(flag);
+                    break;
+            }
             break;
 
         case ESTADO_FALHA:

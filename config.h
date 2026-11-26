@@ -8,10 +8,11 @@
 #define CONFIG_H
 
 //---------------------------------------------------------------------------
-// Controlador
-//   Com FCS_MPC definido roda o FCS-MPC; comentado, o PI em cascata.
+// Controlador ao carregar o programa (troca pela variavel modo no Watch,
+// com o conversor parado; vale na proxima partida):
+//   MODO_PI, MODO_FCS_CORRENTE ou MODO_FCS_TENSAO
 //---------------------------------------------------------------------------
-#define FCS_MPC
+#define MODO_INICIAL        MODO_FCS_TENSAO
 
 //---------------------------------------------------------------------------
 // Relogio do ePWM
@@ -28,6 +29,7 @@
 //---------------------------------------------------------------------------
 #define TBPRD_PI            1250U       // 20 kHz com TBCLK = 50 MHz
 #define TBPRD_FCS           625U        // 40 kHz de amostragem (chave <= 20 kHz)
+                                        // (FCS de corrente e de tensao)
 #define PWM_TEMPO_MORTO     50U         // em TBCLK: 1 us com TBCLK = 50 MHz
 
 //---------------------------------------------------------------------------

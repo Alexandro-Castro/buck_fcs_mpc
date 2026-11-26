@@ -14,6 +14,15 @@ typedef struct {
 } pi_t;
 
 //
+// Controlador em uso (variavel modo no Watch; vale na proxima partida)
+//
+typedef enum {
+    MODO_PI           = 0,  // PI em cascata: tensao -> corrente -> duty
+    MODO_FCS_CORRENTE = 1,  // FCS-MPC de corrente: segue iL_ref
+    MODO_FCS_TENSAO   = 2   // FCS-MPC de tensao: segue vo_ref
+} modo_t;
+
+//
 // Limite de corrente do custo do FCS de tensao (alteravel no Watch)
 //
 extern volatile float iL_limit;
