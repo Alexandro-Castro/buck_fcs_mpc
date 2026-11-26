@@ -27,6 +27,7 @@
 #include "F28x_Project.h"
 #include "config.h"
 #include "controle.h"
+#include "captura.h"
 
 //
 // Controlador e periodo do PWM. Ts = periodo de amostragem = periodo do
@@ -37,8 +38,6 @@ volatile modo_t modo       = MODO_INICIAL;  // escolhido no Watch
 volatile modo_t modo_ativo = MODO_INICIAL;  // em uso
 static Uint16 tbprd = TBPRD_FCS;
 float Ts            = 2.0f * TBPRD_FCS / TBCLK_HZ;   // FCS: 25 us; PI: 50 us
-
-#define RESULTS_BUFFER_SIZE 256
 
 //
 // Estados e falhas
@@ -94,12 +93,28 @@ volatile float iL_ref_atual = 0;    // referencias seguidas pelo controle
 volatile float vo_ref_atual = 0;
 
 //
-// Buffers das ultimas amostras do ADC (contagens)
+// Medidas de tempo e de chaveamento (Watch)
+//   isr_us      tempo da amostragem (topo do contador) ate o fim da ISR
+//   isr_max_us  maior valor desde que foi zerado (escreva 0 para zerar)
+//   isr_atrasos ISRs que terminaram depois do zero do contador: nesse caso
+//               a decisao do FCS so entra um periodo depois
+//   fsw_hz      frequencia media de chaveamento na ultima janela
 //
-Uint16 AdcaResults_0[RESULTS_BUFFER_SIZE];   // ADCINA0 - tensao vo
-Uint16 AdcaResults_1[RESULTS_BUFFER_SIZE];   // ADCINA2 - corrente iL
-volatile Uint16 resultsIndex;
-volatile Uint16 bufferFull;
+volatile float  isr_us      = 0;
+volatile float  isr_max_us  = 0;
+volatile Uint32 isr_atrasos = 0;
+volatile float  fsw_hz      = 0;
+
+#define US_POR_TBCLK    (1.0e6f / TBCLK_HZ)
+#define FSW_JANELA_S    0.1f
+
+static Uint32 fswTrocas;        // comutacoes da chave na janela atual
+static Uint32 fswAmostras;
+static int    flagAnterior;
+
+static Uint16 eventoPartida;    // liga() aconteceu nesta amostra
+static float  iL_refAnterior;   // para detectar mudanca de referencia
+static float  vo_refAnterior;
 
 static Uint16 ledCount;
 
@@ -128,12 +143,12 @@ static float rampa(float atual, float alvo, float passo);
 static Uint16 cmpa_do_duty(float duty);
 static float limita(float x, float min, float max);
 static void pisca_led(void);
+static void mede_chaveamento(void);
+static void mede_tempo_isr(void);
 interrupt void adca1_isr(void);
 
 void main(void)
 {
-    Uint16 i;
-
     //
     // Sistema: PLL, watchdog, clocks dos perifericos
     //
@@ -196,17 +211,7 @@ void main(void)
     aplica_modo(modo);
     controle_inicializacao(Ts);
 
-    //
-    // Buffers e LED
-    //
-    for(i = 0; i < RESULTS_BUFFER_SIZE; i++)
-    {
-        AdcaResults_0[i] = 0;
-        AdcaResults_1[i] = 0;
-    }
-    resultsIndex = 0;
-    bufferFull   = 0;
-    ledCount     = 0;
+    ledCount = 0;
 
     //
     // Habilita interrupcoes
@@ -227,14 +232,12 @@ void main(void)
     GPIO_WritePin(GPIO_P2, 1);
 
     //
-    // Loop principal: o PWM, o ADC e o controle rodam por interrupcao
+    // Loop principal: o PWM, o ADC e o controle rodam por interrupcao; aqui
+    // so se organiza a captura quando ela termina
     //
     for(;;)
     {
-        if(bufferFull)
-        {
-            bufferFull = 0;
-        }
+        captura_fundo();
     }
 }
 
@@ -572,6 +575,11 @@ static void liga(void)
     d    = 0;
     flag = 0;
 
+    flagAnterior  = 0;
+    fswTrocas     = 0;
+    fswAmostras   = 0;
+    eventoPartida = 1;
+
     EALLOW;
     EPwm1Regs.TZOSTCLR.all      = 0x00FF;   // limpa as origens do trip
     EPwm1Regs.TZCLR.bit.DCAEVT1 = 1;
@@ -727,32 +735,82 @@ static void pisca_led(void)
 }
 
 //
+// mede_chaveamento - Frequencia media de chaveamento numa janela de
+//                    FSW_JANELA_S (no PI e a do PWM)
+//
+static void mede_chaveamento(void)
+{
+    if(estado != ESTADO_RODANDO)
+    {
+        fsw_hz      = 0;
+        fswTrocas   = 0;
+        fswAmostras = 0;
+        return;
+    }
+
+    if(modo_ativo == MODO_PI)
+    {
+        fsw_hz = 1.0f / Ts;
+        return;
+    }
+
+    if(flag != flagAnterior)
+    {
+        fswTrocas++;
+        flagAnterior = flag;
+    }
+
+    fswAmostras++;
+    if((float)fswAmostras * Ts >= FSW_JANELA_S)
+    {
+        fsw_hz      = 0.5f * (float)fswTrocas / ((float)fswAmostras * Ts);
+        fswTrocas   = 0;
+        fswAmostras = 0;
+    }
+}
+
+//
+// mede_tempo_isr - Tempo desde a amostragem (CTR = TBPRD, quando o SOCA
+//                  dispara o ADC) ate aqui, pelo proprio contador, que
+//                  esta descendo. Contando para cima, ja passou do zero.
+//
+static void mede_tempo_isr(void)
+{
+    Uint16 ctr = EPwm1Regs.TBCTR;
+
+    if(EPwm1Regs.TBSTS.bit.CTRDIR == 0U)
+    {
+        isr_us = (float)(EPwm1Regs.TBPRD - ctr) * US_POR_TBCLK;
+        if(isr_us > isr_max_us)
+        {
+            isr_max_us = isr_us;
+        }
+    }
+    else
+    {
+        isr_atrasos++;
+    }
+}
+
+//
 // adca1_isr - Le vo e iL e roda o controle, uma vez por periodo do PWM
 //
 interrupt void adca1_isr(void)
 {
     falha_t f;
+    Uint16 eventos;
 
     //
-    // Depuracao: GPIO18 alterna a cada interrupcao (onda de 1/(2*Ts))
+    // Depuracao: GPIO18 em 1 durante a ISR (frequencia = 1/Ts, largura do
+    // pulso = tempo de execucao)
     //
-    GpioDataRegs.GPATOGGLE.bit.GPIO18 = 1;
+    GpioDataRegs.GPASET.bit.GPIO18 = 1;
 
     //
     // Le os resultados
     //
-    AdcaResults_0[resultsIndex] = AdcaResultRegs.ADCRESULT0;   // vo
-    AdcaResults_1[resultsIndex] = AdcaResultRegs.ADCRESULT1;   // iL
-
     vo = AdcaResultRegs.ADCRESULT0 * KADC_V;
     iL = ((float)AdcaResultRegs.ADCRESULT1 - offset_iL) * KADC_I;
-
-    resultsIndex++;
-    if(resultsIndex >= RESULTS_BUFFER_SIZE)
-    {
-        resultsIndex = 0;
-        bufferFull   = 1;
-    }
 
     pisca_led();
 
@@ -843,6 +901,31 @@ interrupt void adca1_isr(void)
     }
 
     //
+    // Medidas e captura
+    //
+    mede_chaveamento();
+
+    eventos = 0;
+    if(eventoPartida)
+    {
+        eventos      |= CAP_EV_PARTIDA;
+        eventoPartida = 0;
+    }
+    if((estado == ESTADO_RODANDO) &&
+       ((iL_ref != iL_refAnterior) || (vo_ref != vo_refAnterior)))
+    {
+        eventos |= CAP_EV_REFERENCIA;
+    }
+    iL_refAnterior = iL_ref;
+    vo_refAnterior = vo_ref;
+
+    captura_amostra(vo, iL,
+                    (modo_ativo == MODO_PI) ? d : (float)flag,
+                    (modo_ativo == MODO_FCS_CORRENTE) ? iL_ref_atual
+                                                      : vo_ref_atual,
+                    eventos);
+
+    //
     // Limpa a flag e trata overflow
     //
     AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
@@ -851,6 +934,9 @@ interrupt void adca1_isr(void)
         AdcaRegs.ADCINTOVFCLR.bit.ADCINT1 = 1;
         AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
     }
+
+    mede_tempo_isr();
+    GpioDataRegs.GPACLEAR.bit.GPIO18 = 1;
 
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
 }
