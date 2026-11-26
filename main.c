@@ -112,6 +112,7 @@ static void desliga(void);
 static void entra_falha(falha_t f);
 static falha_t verifica_falhas(void);
 static float rampa(float atual, float alvo, float passo);
+static Uint16 cmpa_do_duty(float duty);
 static float limita(float x, float min, float max);
 static void pisca_led(void);
 interrupt void adca1_isr(void);
@@ -463,7 +464,7 @@ static void aplica_modo(modo_t m)
     Ts    = 2.0f * tbprd / TBCLK_HZ;
 
     EPwm1Regs.TBPRD         = tbprd;    // shadow: carrega em CTR = 0
-    EPwm1Regs.CMPA.bit.CMPA = 0;
+    EPwm1Regs.CMPA.bit.CMPA = cmpa_do_duty(0.0f);
 
     if(m == MODO_PI)
     {
@@ -530,7 +531,7 @@ static void desliga(void)
     {
         PWM1_SetA(0);
     }
-    EPwm1Regs.CMPA.bit.CMPA = 0;
+    EPwm1Regs.CMPA.bit.CMPA = cmpa_do_duty(0.0f);
     d    = 0;
     flag = 0;
 
@@ -601,6 +602,26 @@ static float rampa(float atual, float alvo, float passo)
         return atual - passo;
     }
     return alvo;
+}
+
+//
+// cmpa_do_duty - CMPA = d * TBPRD, entre 1 e TBPRD - 1. CMPA = 0 coincide
+//                com o evento de zero do contador; com 1, o pulso de 2 TBCLK
+//                que sobra fica dentro do tempo morto e nao chega a chave.
+//
+static Uint16 cmpa_do_duty(float duty)
+{
+    float c = duty * (float)tbprd;
+
+    if(c < 1.0f)
+    {
+        return 1U;
+    }
+    if(c > (float)(tbprd - 1U))
+    {
+        return tbprd - 1U;
+    }
+    return (Uint16)c;
 }
 
 static float limita(float x, float min, float max)
@@ -707,8 +728,8 @@ interrupt void adca1_isr(void)
             switch(modo_ativo)
             {
                 case MODO_PI:
-                    d = controle(vo, iL, vo_ref_atual);
-                    EPwm1Regs.CMPA.bit.CMPA = d * tbprd;
+                    d = controle(vo, iL, vo_ref_atual);   // ja limitado
+                    EPwm1Regs.CMPA.bit.CMPA = cmpa_do_duty(d);
                     break;
 
                 case MODO_FCS_CORRENTE:

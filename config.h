@@ -88,6 +88,11 @@
 #define PI_V_KP             0.1f
 #define PI_V_KI             10.0f
 
+#define PI_IL_REF_MAX       2.0f        // A: saida da malha de tensao
+#define PI_D_MIN            0.0f        // limites do duty
+#define PI_D_MAX            0.95f
+#define PI_FEEDFORWARD      1           // 1: soma d0 = vo/E ao duty
+
 //---------------------------------------------------------------------------
 // FCS-MPC de tensao: pesos do custo e penalidade de sobrecorrente
 //---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ extern float L;
 extern float C;
 extern float R;
 
-float controlador_pi(pi_t *pi, float erro);
+float controlador_pi(pi_t *pi, float erro, float umin, float umax);
 void  controle_inicializacao(float Ts);
 float controle(float v, float i, float vo_ref);
 int   controlador_fcs_mpc_corrente(float vo, float iL, float iL_ref);

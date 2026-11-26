@@ -53,6 +53,7 @@ static float Ts_div_C = 0;      // Ts/C
 static float Th_div_L = 0;      // (Ts/2)/L
 static float Th_div_C = 0;      // (Ts/2)/C
 static float G        = 0;      // 1/R
+static float invE     = 0;      // 1/E (feedforward do PI)
 
 static pi_t pi_corrente;
 static pi_t pi_tensao;
@@ -60,18 +61,39 @@ static pi_t pi_tensao;
 int sOpt = 0;   // estado aplicado no intervalo atual (ultima decisao)
 
 //
-// controlador_pi - PI discreto: u = kp*e + ki*soma(e), com ki = KI*Ts
+// controlador_pi - PI discreto: u = kp*e + ki*soma(e), com ki = KI*Ts,
+//                  saturado em [umin, umax]. Anti-windup por integracao
+//                  condicional: saturado, so integra o erro que tira da
+//                  saturacao.
 //
-float controlador_pi(pi_t *pi, float erro)
+float controlador_pi(pi_t *pi, float erro, float umin, float umax)
 {
-    float uP;
-    float uI;
+    float u;
 
-    uP = pi->kp * erro;
-    pi->integral = pi->integral + erro;
-    uI = pi->integral * pi->ki;
+    u = pi->kp * erro + pi->ki * (pi->integral + erro);
 
-    return (uP + uI);
+    if(u > umax)
+    {
+        u = umax;
+        if(erro < 0.0f)
+        {
+            pi->integral += erro;
+        }
+    }
+    else if(u < umin)
+    {
+        u = umin;
+        if(erro > 0.0f)
+        {
+            pi->integral += erro;
+        }
+    }
+    else
+    {
+        pi->integral += erro;
+    }
+
+    return u;
 }
 
 //
@@ -97,19 +119,36 @@ void controle_inicializacao(float Ts)
     Th_div_L = 0.5f * Ts_div_L;
     Th_div_C = 0.5f * Ts_div_C;
     G        = 1.0f / R;
+    invE     = 1.0f / E;
 }
 
 //
-// controle - PI em cascata: tensao (externa) -> iL_ref -> corrente -> duty
+// controle - PI em cascata: tensao (externa) -> iL_ref -> corrente -> duty.
+//            iL_ref limitada a [0, PI_IL_REF_MAX] (limite de corrente) e
+//            duty a [PI_D_MIN, PI_D_MAX], com feedforward d0 = vo/E.
 //
 float controle(float v, float i, float vo_ref)
 {
-    float erro_i;
+    float d0;
 
-    iL_ref_pi = controlador_pi(&pi_tensao, vo_ref - v);
-    erro_i    = iL_ref_pi - i;
+    iL_ref_pi = controlador_pi(&pi_tensao, vo_ref - v, 0.0f, PI_IL_REF_MAX);
 
-    return controlador_pi(&pi_corrente, erro_i);
+#if PI_FEEDFORWARD
+    d0 = v * invE;
+    if(d0 > PI_D_MAX)
+    {
+        d0 = PI_D_MAX;
+    }
+    if(d0 < PI_D_MIN)
+    {
+        d0 = PI_D_MIN;
+    }
+#else
+    d0 = 0.0f;
+#endif
+
+    return d0 + controlador_pi(&pi_corrente, iL_ref_pi - i,
+                               PI_D_MIN - d0, PI_D_MAX - d0);
 }
 
 //
